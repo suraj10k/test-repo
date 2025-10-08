@@ -310,13 +310,20 @@ def main() -> None:
                                 diff_delta = val - prev_val
                                 diff_violated = diff_delta >= diff_threshold
                             
-                            # Determine status
+                            # Build status message
                             if bounds_violated or diff_violated:
-                                suffix = ""
+                                violations = []
+                                if bounds_violated:
+                                    violations.append("bounds")
                                 if diff_violated and diff_delta is not None:
-                                    suffix = f" (Δ+{round(diff_delta, 3)})"
+                                    violations.append(f"Δ+{round(diff_delta, 3)}")
+                                
+                                suffix = f" ({', '.join(violations)})" if violations else ""
                                 lines.append(f"  - {label} ‼️ = {round(val, 3)}{suffix}")
                                 titles_with_oob.add(title)
+                                
+                                # Debug logging
+                                print(f"[ALERT] {title}/{label}: val={round(val, 3)}, prev={prev_val}, diff_threshold={diff_threshold}, delta={diff_delta}")
                             else:
                                 lines.append(f"  - {label} ✅ = {round(val, 3)}")
                             
