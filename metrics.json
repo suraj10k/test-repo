@@ -2,7 +2,7 @@
   "metrics": [
     {
       "title": "UQ ODH",
-      "label": "API CPU",
+      "label": "UQ API CPU",
       "namespace": "AWS/ECS",
       "metric_name": "CPUUtilization",
       "dimensions": [
@@ -11,7 +11,7 @@
       ],
       "stat": "Maximum",
       "period": 60,
-      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "acceptable_bounds": { "lower": 0, "upper": 80 },
       "diff": 20,
       "mentions": {
         "title": [ { "email": "suraj.kakarlapudi@fastretailing.com", "name": "Suraj Kakarlapdui (FR ODH)" } ]
@@ -19,7 +19,7 @@
     },
     {
       "title": "UQ ODH",
-      "label": "memory Max",
+      "label": "UQ Memory Max",
       "namespace": "AWS/ECS",
       "metric_name": "MemoryUtilization",
       "dimensions": [
@@ -28,7 +28,7 @@
       ],
       "stat": "Maximum",
       "period": 60,
-      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "acceptable_bounds": { "lower": 0, "upper": 85 },
       "diff": 15,
       "mentions": {
         "title": [ { "email": "suraj.kakarlapudi@fastretailing.com", "name": "Suraj Kakarlapdui (FR ODH)" } ]
@@ -36,7 +36,7 @@
     },
     {
       "title": "GU ODH",
-      "label": "API CPU",
+      "label": "GU API CPU",
       "namespace": "AWS/ECS",
       "metric_name": "CPUUtilization",
       "dimensions": [
@@ -45,7 +45,7 @@
       ],
       "stat": "Maximum",
       "period": 60,
-      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "acceptable_bounds": { "lower": 0, "upper": 80 },
       "diff": 20,
       "mentions": {
         "title": [ { "email": "suraj.kakarlapudi@fastretailing.com", "name": "Suraj Kakarlapdui (FR ODH)" } ]
@@ -53,7 +53,7 @@
     },
     {
       "title": "GU ODH",
-      "label": "Memory Max",
+      "label": "GU Memory Max",
       "namespace": "AWS/ECS",
       "metric_name": "MemoryUtilization",
       "dimensions": [
@@ -62,7 +62,7 @@
       ],
       "stat": "Maximum",
       "period": 60,
-      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "acceptable_bounds": { "lower": 0, "upper": 85 },
       "diff": 15,
       "mentions": {
         "title": [ { "email": "suraj.kakarlapudi@fastretailing.com", "name": "Suraj Kakarlapdui (FR ODH)" } ]
@@ -70,7 +70,7 @@
     },
     {
       "title": "Common DB",
-      "label": "CPU Max",
+      "label": "DB CPU Max",
       "namespace": "AWS/RDS",
       "metric_name": "CPUUtilization",
       "dimensions": [
@@ -78,7 +78,7 @@
       ],
       "stat": "Maximum",
       "period": 60,
-      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "acceptable_bounds": { "lower": 0, "upper": 80 },
       "diff": 25,
       "mentions": {
         "title": [ 

@@ -6,360 +6,293 @@ import time
 import argparse
 import requests
 import boto3
-from collections import OrderedDict
-from typing import Dict, List, Tuple, Set, Optional
-from botocore.exceptions import BotoCoreError, ClientError
 from datetime import datetime, timedelta, timezone
- 
+from botocore.exceptions import BotoCoreError, ClientError
+
+# Configuration constants
 LOG_INTERVAL_SECONDS = 60
 LOOKBACK_WINDOW_MINUTES = 5
 DEFAULT_STAT = "Maximum"
 DEFAULT_PERIOD = 60
- 
-def validate_metric(i: int, m: dict) -> None:
-    required_keys = {"label", "namespace", "metric_name", "dimensions", "acceptable_bounds"}
-    missing = required_keys - set(m.keys())
-    if missing:
-        raise ValueError(f"Metric #{i} missing keys: {', '.join(sorted(missing))}")
- 
-    # dimensions
-    dims = m["dimensions"]
-    if not isinstance(dims, list) or not all(
-        isinstance(d, dict) and {"Name", "Value"} <= set(d.keys()) for d in dims
-    ):
-        raise ValueError(f"Metric #{i} 'dimensions' must be a list of objects with 'Name' and 'Value'.")
- 
-    # bounds
-    ab = m["acceptable_bounds"]
-    if not isinstance(ab, dict) or not {"lower", "upper"} <= set(ab.keys()):
-        raise ValueError(f"Metric #{i} 'acceptable_bounds' must contain 'lower' and 'upper'.")
-    lower, upper = ab["lower"], ab["upper"]
-    if not isinstance(lower, (int, float)) or not isinstance(upper, (int, float)):
-        raise ValueError(f"Metric #{i} acceptable_bounds.lower/upper must be numbers.")
-    if lower > upper:
-        raise ValueError(f"Metric #{i} acceptable_bounds.lower cannot be greater than upper.")
- 
-    # optional diff threshold
-    if "diff" in m:
-        diff_val = m["diff"]
-        if not isinstance(diff_val, (int, float)) or diff_val < 0:
-            raise ValueError(f"Metric #{i} 'diff' must be a non-negative number.")
- 
-    # optional title
-    if "title" in m and not (isinstance(m["title"], str) and m["title"].strip()):
-        raise ValueError(f"Metric #{i} 'title' must be a non-empty string if provided.")
- 
-    # [{email,name}]
-    if "mentions" in m:
-        mentions = m["mentions"]
-        if not isinstance(mentions, dict):
-            raise ValueError(f"Metric #{i} 'mentions' must be an object.")
-        if "label" in mentions:
-            raise ValueError(f"Metric #{i} 'mentions.label' is not supported. Use 'mentions.title' only.")
-        if "title" in mentions:
-            arr = mentions["title"]
-            if not isinstance(arr, list):
-                raise ValueError(f"Metric #{i} 'mentions.title' must be an array.")
-            for j, elt in enumerate(arr):
-                if not isinstance(elt, dict):
-                    raise ValueError(f"Metric #{i} 'mentions.title[{j}]' must be an object with 'email' and 'name'.")
-                email = elt.get("email")
-                name = elt.get("name")
-                if not (isinstance(email, str) and "@" in email):
-                    raise ValueError(f"Metric #{i} 'mentions.title[{j}].email' must be a valid email/UPN.")
-                if not (isinstance(name, str) and name.strip()):
-                    raise ValueError(f"Metric #{i} 'mentions.title[{j}].name' must be a non-empty string.")
- 
-def load_config(script_dir: str) -> List[dict]:
-    path = os.path.join(script_dir, "metrics.json")
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Required metrics file not found: {path}\n"
-        )
- 
-    with open(path, "r", encoding="utf-8") as f:
-        root = json.load(f)
- 
-    if not isinstance(root, dict):
-        raise ValueError('metrics.json root must be an OBJECT: { "metrics": [...] }')
- 
-    if "metrics" not in root or not isinstance(root["metrics"], list):
-        raise ValueError('metrics.json must include "metrics" as an array.')
- 
-    metrics: List[dict] = root["metrics"]
- 
-    for i, m in enumerate(metrics):
-        if not isinstance(m, dict):
-            raise ValueError(f"Metric #{i} must be a JSON object.")
-        validate_metric(i, m)
- 
-    return metrics
- 
- 
-def extract_title_mentions(arr: List[dict]) -> Dict[str, str]:
-    mapping: Dict[str, str] = {}
-    for elt in arr or []:
-        email = str(elt["email"]).strip()
-        name = str(elt["name"]).strip()
-        mapping[email] = name
-    return mapping
- 
- 
-def build_watchers_by_title(metrics: List[dict]) -> Dict[str, Dict[str, str]]:
-    watchers: Dict[str, Dict[str, str]] = {}
-    for m in metrics:
-        title = m.get("title", "General")
-        arr = (m.get("mentions", {}) or {}).get("title", [])
-        emails_map = extract_title_mentions(arr)
-        if emails_map:
-            if title not in watchers:
-                watchers[title] = {}
-            watchers[title].update(emails_map)
-    return watchers
 
-def build_metric_queries(metrics: List[dict]) -> Tuple[List[dict], Dict[str, str]]:
+def load_metrics(script_dir):
+    """Load and validate metrics from metrics.json"""
+    config_path = os.path.join(script_dir, "metrics.json")
+    
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"metrics.json not found at: {config_path}")
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    
+    if "metrics" not in config or not isinstance(config["metrics"], list):
+        raise ValueError("metrics.json must contain a 'metrics' array")
+    
+    # Validate each metric
+    for idx, metric in enumerate(config["metrics"]):
+        required = ["label", "namespace", "metric_name", "dimensions", "acceptable_bounds"]
+        missing = [k for k in required if k not in metric]
+        if missing:
+            raise ValueError(f"Metric #{idx} missing required fields: {missing}")
+        
+        # Validate bounds
+        bounds = metric["acceptable_bounds"]
+        if bounds["lower"] > bounds["upper"]:
+            raise ValueError(f"Metric #{idx}: lower bound cannot exceed upper bound")
+        
+        # Validate diff if present
+        if "diff" in metric and (not isinstance(metric["diff"], (int, float)) or metric["diff"] < 0):
+            raise ValueError(f"Metric #{idx}: 'diff' must be a non-negative number")
+    
+    return config["metrics"]
+
+def fetch_metrics(cloudwatch, metrics):
+    """Fetch latest metric values from CloudWatch"""
+    end_time = datetime.now(timezone.utc)
+    start_time = end_time - timedelta(minutes=LOOKBACK_WINDOW_MINUTES)
+    
+    # Build queries with unique IDs
     queries = []
-    id_map = {}
-    for idx, m in enumerate(metrics):
-        qid = f"m{idx}"
-        period = m.get("period", DEFAULT_PERIOD)
-        stat = m.get("stat", DEFAULT_STAT)
+    for idx, metric in enumerate(metrics):
         queries.append({
-            "Id": qid,
+            "Id": f"m{idx}",
             "MetricStat": {
                 "Metric": {
-                    "Namespace": m["namespace"],
-                    "MetricName": m["metric_name"],
-                    "Dimensions": m["dimensions"],
+                    "Namespace": metric["namespace"],
+                    "MetricName": metric["metric_name"],
+                    "Dimensions": metric["dimensions"],
                 },
-                "Period": period,
-                "Stat": stat,
+                "Period": metric.get("period", DEFAULT_PERIOD),
+                "Stat": metric.get("stat", DEFAULT_STAT),
             },
             "ReturnData": True,
         })
-        id_map[qid] = m["label"]
-    return queries, id_map
- 
- 
-def fetch_latest_metrics(cloudwatch, metrics: List[dict]) -> Dict[str, Tuple[Optional[datetime], Optional[float]]]:
-    end_time = datetime.now(timezone.utc)
-    start_time = end_time - timedelta(minutes=LOOKBACK_WINDOW_MINUTES)
-    queries, id_map = build_metric_queries(metrics)
-    resp = cloudwatch.get_metric_data(
-        MetricDataQueries=queries,
-        StartTime=start_time,
-        EndTime=end_time,
-        ScanBy="TimestampAscending",
-    )
-    out: Dict[str, Tuple[Optional[datetime], Optional[float]]] = {}
-    for r in resp.get("MetricDataResults", []):
-        label = id_map.get(r.get("Id"))
-        ts_list = r.get("Timestamps", []) or []
-        val_list = r.get("Values", []) or []
-        if not ts_list or not val_list:
-            out[label] = (None, None)
+    
+    try:
+        response = cloudwatch.get_metric_data(
+            MetricDataQueries=queries,
+            StartTime=start_time,
+            EndTime=end_time,
+            ScanBy="TimestampAscending",
+        )
+    except (ClientError, BotoCoreError) as e:
+        print(f"ERROR fetching metrics: {e}")
+        return {}
+    
+    # Parse results and map back to metric indices
+    results = {}
+    for result in response.get("MetricDataResults", []):
+        metric_id = result.get("Id")
+        if not metric_id or not metric_id.startswith("m"):
             continue
-        pairs = sorted(zip(ts_list, val_list))
-        latest_ts, latest_val = pairs[-1]
-        if latest_ts.tzinfo is None:
-            latest_ts = latest_ts.replace(tzinfo=timezone.utc)
-        out[label] = (latest_ts, latest_val)
- 
-    for m in metrics:
-        out.setdefault(m["label"], (None, None))
-    return out
- 
-def group_by_title(metrics: List[dict]) -> "OrderedDict[str, List[dict]]":
-    grouped: "OrderedDict[str, List[dict]]" = OrderedDict()
-    for m in metrics:
-        title = m.get("title", "General")
-        grouped.setdefault(title, []).append(m)
-    return grouped
- 
-def build_mentions_entities(email_to_name: Dict[str, str]) -> Tuple[str, List[dict]]:
-    if not email_to_name:
-        return "", []
- 
-    at_fragments: List[str] = []
-    entities: List[dict] = []
- 
-    for email, name in sorted(email_to_name.items(), key=lambda kv: (kv[1].lower(), kv[0].lower())):
-        display = name or email
-        at_text = f"<at>{display}</at>"
-        at_fragments.append(at_text)
-        entities.append({
-            "type": "mention",
-            "text": at_text,               
-            "mentioned": {"id": email, "name": display}
-        })
- 
-    return "Notifying: " + " ".join(at_fragments), entities
- 
- 
-def build_adaptive_card(grouped_lines: List[str], email_to_name: Dict[str, str]) -> dict:
-    body: List[dict] = []
-    for line in grouped_lines:
-        if line and not line.startswith("  - "):
-            body.append({
-                "type": "TextBlock", "text": line,
-                "weight": "Bolder", "size": "Medium", "wrap": True, "spacing": "Medium"
-            })
+        
+        idx = int(metric_id[1:])  # Extract index from "m0", "m1", etc.
+        timestamps = result.get("Timestamps", [])
+        values = result.get("Values", [])
+        
+        if timestamps and values:
+            # Get the latest value
+            pairs = sorted(zip(timestamps, values))
+            latest_ts, latest_val = pairs[-1]
+            results[idx] = latest_val
         else:
-            body.append({
-                "type": "TextBlock", "text": line, "wrap": True, "spacing": "Small"
+            results[idx] = None
+    
+    return results
+
+def build_teams_message(metrics, current_values, previous_values):
+    """Build Microsoft Teams adaptive card with metric status"""
+    grouped = {}  # Group by title
+    alerts = {}   # Track which titles have alerts
+    mentions = {} # Track who to mention
+    
+    for idx, metric in enumerate(metrics):
+        title = metric.get("title", "General")
+        label = metric["label"]
+        current = current_values.get(idx)
+        previous = previous_values.get(idx)
+        
+        if title not in grouped:
+            grouped[title] = []
+        
+        # Determine metric status
+        if current is None:
+            status_line = f"  - {label} = NA"
+        else:
+            lower = metric["acceptable_bounds"]["lower"]
+            upper = metric["acceptable_bounds"]["upper"]
+            diff_threshold = metric.get("diff")
+            
+            # Check violations
+            bounds_violated = not (lower <= current <= upper)
+            diff_violated = False
+            delta = None
+            
+            if diff_threshold and previous is not None:
+                delta = current - previous
+                diff_violated = delta >= diff_threshold
+            
+            # Build status message
+            if bounds_violated or diff_violated:
+                violations = []
+                if bounds_violated:
+                    violations.append("bounds")
+                if diff_violated:
+                    violations.append(f"Δ+{round(delta, 2)}")
+                
+                suffix = f" ({', '.join(violations)})" if violations else ""
+                status_line = f"  - {label} ‼️ = {round(current, 2)}{suffix}"
+                
+                # Mark this title for alerts
+                if title not in alerts:
+                    alerts[title] = True
+                
+                # Extract mentions for this metric's title
+                if "mentions" in metric and "title" in metric["mentions"]:
+                    for person in metric["mentions"]["title"]:
+                        email = person.get("email")
+                        name = person.get("name")
+                        if email and name:
+                            mentions[email] = name
+                
+                print(f"[ALERT] {title}/{label}: current={round(current, 2)}, "
+                      f"previous={previous}, bounds=[{lower}, {upper}], "
+                      f"diff_threshold={diff_threshold}, delta={delta}")
+            else:
+                status_line = f"  - {label} ✅ = {round(current, 2)}"
+        
+        grouped[title].append(status_line)
+    
+    # Build message lines
+    lines = []
+    for title, status_lines in grouped.items():
+        lines.append(title)
+        lines.extend(status_lines)
+        lines.append("")
+    
+    # Build adaptive card
+    card_body = []
+    for line in lines:
+        if line and not line.startswith("  - "):
+            # Title header
+            card_body.append({
+                "type": "TextBlock",
+                "text": line,
+                "weight": "Bolder",
+                "size": "Medium",
+                "wrap": True,
+                "spacing": "Medium"
             })
- 
-    at_line, entities = build_mentions_entities(email_to_name)
-    if at_line:
-        body.append({"type": "TextBlock", "text": at_line, "wrap": True, "spacing": "Medium"})
- 
-    card_content = {
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "type": "AdaptiveCard",
-        "version": "1.4",
-        "body": body,
-        "msteams": {"entities": entities}
-    }
- 
+        elif line:
+            # Metric line
+            card_body.append({
+                "type": "TextBlock",
+                "text": line,
+                "wrap": True,
+                "spacing": "Small"
+            })
+    
+    # Add mentions if there are alerts
+    entities = []
+    if mentions:
+        mention_text = "Notifying: " + " ".join([
+            f"<at>{name}</at>" for email, name in sorted(mentions.items())
+        ])
+        card_body.append({
+            "type": "TextBlock",
+            "text": mention_text,
+            "wrap": True,
+            "spacing": "Medium"
+        })
+        
+        entities = [
+            {
+                "type": "mention",
+                "text": f"<at>{name}</at>",
+                "mentioned": {"id": email, "name": name}
+            }
+            for email, name in mentions.items()
+        ]
+    
     return {
         "type": "message",
-        "attachments": [
-            {
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": card_content
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": card_body,
+                "msteams": {"entities": entities}
             }
-        ]
+        }]
     }
- 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Poll CloudWatch metrics (from metrics.json) and post grouped status to Microsoft Teams."
-    )
-    p.add_argument("--aws-profile", required=True, help="AWS named profile for credentials (e.g., default)")
-    p.add_argument("--aws-region", required=True, help="AWS region for CloudWatch metrics (e.g., ap-northeast-1)")
-    p.add_argument("--webhook-url", required=True, help="Microsoft Teams Webhook URL (Workflows or Incoming Webhook)")
-    return p.parse_args()
- 
-def main() -> None:
-    args = parse_args()
- 
+
+def main():
+    parser = argparse.ArgumentParser(description="CloudWatch metrics monitor with Teams notifications")
+    parser.add_argument("--aws-profile", required=True, help="AWS profile name")
+    parser.add_argument("--aws-region", required=True, help="AWS region (e.g., ap-northeast-1)")
+    parser.add_argument("--webhook-url", required=True, help="Microsoft Teams webhook URL")
+    args = parser.parse_args()
+    
+    # Load configuration
     script_dir = os.path.dirname(os.path.abspath(__file__))
- 
     try:
-        metrics = load_config(script_dir)
+        metrics = load_metrics(script_dir)
     except Exception as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
+        print(f"Configuration error: {e}", file=sys.stderr)
         sys.exit(1)
- 
-    print(f"Using profile: {args.aws_profile}, region: {args.aws_region}")
-    print(f"Polling every {LOG_INTERVAL_SECONDS}s; default PERIOD={DEFAULT_PERIOD}s, default STAT={DEFAULT_STAT}")
- 
-    grouped_cfg = group_by_title(metrics)
-    print("Tracking metrics (grouped):")
-    for title, group in grouped_cfg.items():
-        print(f"  {title}")
-        for m in group:
-            diff_info = f", diff_threshold={m['diff']}" if "diff" in m else ""
-            print(
-                f"    - {m['label']} :: {m['namespace']}/{m['metric_name']} "
-                f"(stat={m.get('stat', DEFAULT_STAT)}, period={m.get('period', DEFAULT_PERIOD)}) "
-                f"acceptable_bounds=[{m['acceptable_bounds']['lower']}, {m['acceptable_bounds']['upper']}]{diff_info}"
-            )
-    print("Press Ctrl+C to stop.\n")
- 
+    
+    print(f"Loaded {len(metrics)} metrics from metrics.json")
+    print(f"AWS Profile: {args.aws_profile}, Region: {args.aws_region}")
+    print(f"Polling interval: {LOG_INTERVAL_SECONDS}s\n")
+    
+    # Initialize AWS client
     session = boto3.Session(profile_name=args.aws_profile, region_name=args.aws_region)
     cloudwatch = session.client("cloudwatch")
- 
-    # Store previous values for diff comparison
-    previous_values: Dict[str, Optional[float]] = {m["label"]: None for m in metrics}
- 
-    # main loop
+    
+    # Track previous values for diff calculation
+    previous_values = {}
+    
+    print("Starting monitoring loop... (Press Ctrl+C to stop)\n")
+    
     try:
         while True:
-            now = datetime.now(timezone.utc)
+            timestamp = datetime.now(timezone.utc).isoformat()
+            
+            # Fetch current metrics
+            current_values = fetch_metrics(cloudwatch, metrics)
+            
+            if not current_values:
+                print(f"{timestamp} | Failed to fetch metrics, retrying...")
+                time.sleep(LOG_INTERVAL_SECONDS)
+                continue
+            
+            # Build and send Teams message
+            message = build_teams_message(metrics, current_values, previous_values)
+            
             try:
-                latest = fetch_latest_metrics(cloudwatch, metrics)
- 
-                # Precompute title-level watchers (email->name) from inline mentions
-                watchers_by_title = build_watchers_by_title(metrics)
- 
-                lines: List[str] = []
-                mentions_email_to_name: Dict[str, str] = {}
-                titles_with_oob: Set[str] = set()
- 
-                for title, group in group_by_title(metrics).items():
-                    lines.append(title)
-                    for m in group:
-                        label = m["label"]
-                        lb = m["acceptable_bounds"]["lower"]
-                        ub = m["acceptable_bounds"]["upper"]
-                        diff_threshold = m.get("diff")
-                        ts, val = latest.get(label, (None, None))
-                        prev_val = previous_values.get(label)
- 
-                        if ts is None or val is None:
-                            lines.append(f"  - {label} = NA")
-                        else:
-                            # Check absolute bounds violation
-                            bounds_violated = not (lb <= val <= ub)
-                            
-                            # Check diff threshold violation
-                            diff_violated = False
-                            diff_delta = None
-                            if diff_threshold is not None and prev_val is not None:
-                                diff_delta = val - prev_val
-                                diff_violated = diff_delta >= diff_threshold
-                            
-                            # Build status message
-                            if bounds_violated or diff_violated:
-                                violations = []
-                                if bounds_violated:
-                                    violations.append("bounds")
-                                if diff_violated and diff_delta is not None:
-                                    violations.append(f"Δ+{round(diff_delta, 3)}")
-                                
-                                suffix = f" ({', '.join(violations)})" if violations else ""
-                                lines.append(f"  - {label} ‼️ = {round(val, 3)}{suffix}")
-                                titles_with_oob.add(title)
-                                
-                                # Debug logging
-                                print(f"[ALERT] {title}/{label}: val={round(val, 3)}, prev={prev_val}, diff_threshold={diff_threshold}, delta={diff_delta}")
-                            else:
-                                lines.append(f"  - {label} ✅ = {round(val, 3)}")
-                            
-                            # Update previous value for next iteration
-                            previous_values[label] = val
-                    
-                    lines.append("")
- 
-                # Add title-level watchers ONCE per title that had any OOB metric
-                for t in titles_with_oob:
-                    for email, name in watchers_by_title.get(t, {}).items():
-                        mentions_email_to_name[email] = name
- 
-                # Build and POST Adaptive Card
-                card_payload = build_adaptive_card(
-                    grouped_lines=[l for l in lines if l.strip() != ""],
-                    email_to_name=mentions_email_to_name
-                )
- 
-                resp = requests.post(
+                response = requests.post(
                     args.webhook_url,
                     headers={"Content-Type": "application/json"},
-                    data=json.dumps(card_payload),
+                    json=message,
                     timeout=15
                 )
-                if resp.status_code // 100 != 2:
-                    raise SystemExit(f"Teams webhook failed: {resp.status_code} | {resp.text[:500]}")
-                print(f"{now.isoformat()}Z Posted Adaptive Card. HTTP {resp.status_code}")
- 
-            except (ClientError, BotoCoreError) as e:
-                print(f"{now.isoformat()}Z, error=\"{type(e).__name__}: {e}\"")
- 
+                
+                if response.status_code == 200:
+                    print(f"{timestamp} | Posted update to Teams successfully")
+                else:
+                    print(f"{timestamp} | Teams webhook error: {response.status_code} - {response.text[:200]}")
+            except requests.exceptions.RequestException as e:
+                print(f"{timestamp} | Teams webhook request failed: {e}")
+            
+            # Update previous values for next iteration
+            previous_values = current_values.copy()
+            
             time.sleep(LOG_INTERVAL_SECONDS)
- 
+    
     except KeyboardInterrupt:
-        print("\nStopping…")
- 
+        print("\nStopping monitoring...")
+
 if __name__ == "__main__":
     main()
