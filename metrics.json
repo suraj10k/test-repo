@@ -1,0 +1,91 @@
+{
+  "metrics": [
+    {
+      "title": "UQ ODH",
+      "label": "API CPU",
+      "namespace": "AWS/ECS",
+      "metric_name": "CPUUtilization",
+      "dimensions": [
+        { "Name": "ServiceName", "Value": "order-history-consumer-api-v1-uq-jp" },
+        { "Name": "ClusterName", "Value": "order-history-consumer-ecs" }
+      ],
+      "stat": "Maximum",
+      "period": 60,
+      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "diff": 20,
+      "mentions": {
+        "title": [ { "email": "suraj.kakarlapudi@fastretailing.com", "name": "Suraj Kakarlapdui (FR ODH)" } ]
+      }
+    },
+    {
+      "title": "UQ ODH",
+      "label": "memory Max",
+      "namespace": "AWS/ECS",
+      "metric_name": "MemoryUtilization",
+      "dimensions": [
+        { "Name": "ServiceName", "Value": "order-history-consumer-api-v1-uq-jp" },
+        { "Name": "ClusterName", "Value": "order-history-consumer-ecs" }
+      ],
+      "stat": "Maximum",
+      "period": 60,
+      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "diff": 15,
+      "mentions": {
+        "title": [ { "email": "suraj.kakarlapudi@fastretailing.com", "name": "Suraj Kakarlapdui (FR ODH)" } ]
+      }
+    },
+    {
+      "title": "GU ODH",
+      "label": "API CPU",
+      "namespace": "AWS/ECS",
+      "metric_name": "CPUUtilization",
+      "dimensions": [
+        { "Name": "ServiceName", "Value": "order-history-consumer-api-v1-gu-jp" },
+        { "Name": "ClusterName", "Value": "order-history-consumer-ecs" }
+      ],
+      "stat": "Maximum",
+      "period": 60,
+      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "diff": 20,
+      "mentions": {
+        "title": [ { "email": "suraj.kakarlapudi@fastretailing.com", "name": "Suraj Kakarlapdui (FR ODH)" } ]
+      }
+    },
+    {
+      "title": "GU ODH",
+      "label": "Memory Max",
+      "namespace": "AWS/ECS",
+      "metric_name": "MemoryUtilization",
+      "dimensions": [
+        { "Name": "ServiceName", "Value": "order-history-consumer-api-v1-gu-jp" },
+        { "Name": "ClusterName", "Value": "order-history-consumer-ecs" }
+      ],
+      "stat": "Maximum",
+      "period": 60,
+      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "diff": 15,
+      "mentions": {
+        "title": [ { "email": "suraj.kakarlapudi@fastretailing.com", "name": "Suraj Kakarlapdui (FR ODH)" } ]
+      }
+    },
+    {
+      "title": "Common DB",
+      "label": "CPU Max",
+      "namespace": "AWS/RDS",
+      "metric_name": "CPUUtilization",
+      "dimensions": [
+        { "Name": "DBClusterIdentifier", "Value": "order-history-staging" }
+      ],
+      "stat": "Maximum",
+      "period": 60,
+      "acceptable_bounds": { "lower": 0, "upper": 100 },
+      "diff": 25,
+      "mentions": {
+        "title": [ 
+          { "email": "aryamann.a.mishra@fastretailing.com", "name": "Aryamann Mishra (FR SPA)" },
+          { "email": "mohammed.kaif@fastretailing.com", "name": "Mohammed Kaif (FR PDM)" }
+        ]
+      }
+    }
+  ]
+}
